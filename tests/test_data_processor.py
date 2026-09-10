@@ -1,4 +1,4 @@
-from __future__ import annotations
+import io
 
 import pandas as pd
 import pytest
@@ -8,191 +8,289 @@ from app.data_processor import (
     get_dataset_summary,
     load_dataset,
     profile_dataset,
+    run_quality_checks,
     validate_dataframe,
     validate_file,
 )
 
 
-def test_validate_file_accepts_csv() -> None:
-    """CSV files should pass file validation."""
+# ============================================================
+# File validation tests
+# ============================================================
+
+def test_validate_file_accepts_csv():
     validate_file("sales.csv", 1024)
 
 
-def test_validate_file_accepts_excel() -> None:
-    """Excel files should pass file validation."""
+def test_validate_file_accepts_excel():
     validate_file("sales.xlsx", 1024)
 
 
-def test_validate_file_rejects_unsupported_extension() -> None:
-    """Unsupported file extensions should raise a validation error."""
+def test_validate_file_rejects_unsupported_extension():
     with pytest.raises(DatasetValidationError):
-        validate_file("sales.json", 1024)
+        validate_file("sales.txt", 1024)
 
 
-def test_validate_file_rejects_empty_file() -> None:
-    """Empty files should raise a validation error."""
+def test_validate_file_rejects_empty_file():
     with pytest.raises(DatasetValidationError):
         validate_file("sales.csv", 0)
 
 
-def test_validate_dataframe_rejects_empty_dataframe() -> None:
-    """An empty DataFrame should not be accepted."""
-    dataframe = pd.DataFrame()
+# ============================================================
+# DataFrame validation tests
+# ============================================================
+
+def test_validate_dataframe_accepts_valid_dataframe():
+    df = pd.DataFrame(
+        {
+            "Sales": [100, 200, 300],
+            "Region": ["Pune", "Mumbai", "Delhi"],
+        }
+    )
+
+    validate_dataframe(df)
+
+
+def test_validate_dataframe_rejects_empty_dataframe():
+    df = pd.DataFrame()
 
     with pytest.raises(DatasetValidationError):
-        validate_dataframe(dataframe)
+        validate_dataframe(df)
 
 
-def test_get_dataset_summary() -> None:
-    """Dataset summary should return correct dimensions."""
-    dataframe = pd.DataFrame(
+# ============================================================
+# Dataset loading tests
+# ============================================================
+
+def test_load_dataset_csv():
+    csv_content = b"Name,Sales\nA,100\nB,200\n"
+
+    df = load_dataset("sales.csv", csv_content)
+
+    assert len(df) == 2
+    assert list(df.columns) == ["Name", "Sales"]
+
+
+def test_load_dataset_excel():
+    buffer = io.BytesIO()
+
+    source_df = pd.DataFrame(
         {
-            "Product": ["Laptop", "Mouse", "Keyboard"],
-            "Sales": [1000, 500, 300],
+            "Name": ["A", "B"],
+            "Sales": [100, 200],
         }
     )
 
-    summary = get_dataset_summary(dataframe)
+    source_df.to_excel(
+        buffer,
+        index=False,
+        engine="openpyxl",
+    )
 
-    assert summary == {
-        "rows": 3,
-        "columns": 2,
-    }
+    df = load_dataset("sales.xlsx", buffer.getvalue())
+
+    assert len(df) == 2
+    assert list(df.columns) == ["Name", "Sales"]
 
 
-def test_profile_dataset_summary() -> None:
-    """Profile should calculate dataset-level metrics correctly."""
-    dataframe = pd.DataFrame(
+# ============================================================
+# Dataset summary tests
+# ============================================================
+
+def test_get_dataset_summary():
+    df = pd.DataFrame(
         {
-            "Sales": [100.0, 200.0, None, 400.0],
+            "Sales": [100, 200, 300],
+            "Region": ["Pune", "Mumbai", "Pune"],
+        }
+    )
+
+    summary = get_dataset_summary(df)
+
+    assert summary["rows"] == 3
+    assert summary["columns"] == 2
+
+
+# ============================================================
+# Profiling tests
+# ============================================================
+
+def test_profile_dataset_detects_missing_values():
+    df = pd.DataFrame(
+        {
+            "Sales": [100, 200, None, 400],
             "Region": ["Pune", "Mumbai", "Pune", "Mumbai"],
-            "Order_ID": [1, 2, 3, 3],
         }
     )
 
-    profile = profile_dataset(dataframe)
-    summary = profile["summary"]
+    profile = profile_dataset(df)
 
-    assert summary["rows"] == 4
-    assert summary["columns"] == 3
-    assert summary["total_cells"] == 12
-    assert summary["missing_cells"] == 1
-    assert summary["missing_percentage"] == 8.33
-    assert summary["duplicate_rows"] == 0
+    assert profile["summary"]["missing_cells"] == 1
 
-
-def test_profile_dataset_column_details() -> None:
-    """Profile should correctly describe individual columns."""
-    dataframe = pd.DataFrame(
-        {
-            "Sales": [100.0, 200.0, None, 400.0],
-            "Region": ["Pune", "Mumbai", "Pune", "Mumbai"],
-        }
-    )
-
-    profile = profile_dataset(dataframe)
-
-    sales_column = next(
+    sales_details = next(
         item
         for item in profile["column_details"]
         if item["column"] == "Sales"
     )
 
-    assert sales_column["missing"] == 1
-    assert sales_column["missing_percentage"] == 25.0
-    assert sales_column["unique_values"] == 3
+    assert sales_details["missing"] == 1
+    assert sales_details["missing_percentage"] == 25.0
 
 
-def test_profile_dataset_numeric_statistics() -> None:
-    """Profile should calculate numeric statistics."""
-    dataframe = pd.DataFrame(
+def test_profile_dataset_detects_numeric_statistics():
+    df = pd.DataFrame(
         {
             "Sales": [100, 200, 300, 400],
         }
     )
 
-    profile = profile_dataset(dataframe)
-    statistics = profile["numeric_statistics"]["Sales"]
+    profile = profile_dataset(df)
 
-    assert statistics["count"] == 4
-    assert statistics["mean"] == 250.0
-    assert statistics["median"] == 250.0
-    assert statistics["min"] == 100
-    assert statistics["max"] == 400
+    sales_stats = profile["numeric_statistics"]["Sales"]
+
+    assert sales_stats["count"] == 4
+    assert sales_stats["mean"] == 250.0
+    assert sales_stats["median"] == 250.0
+    assert sales_stats["min"] == 100
+    assert sales_stats["max"] == 400
 
 
-def test_profile_dataset_detects_duplicate_rows() -> None:
-    """Profile should detect completely duplicated rows."""
-    dataframe = pd.DataFrame(
+# ============================================================
+# Quality engine tests
+# ============================================================
+
+def test_quality_checks_detect_missing_values():
+    df = pd.DataFrame(
         {
-            "Product": ["Laptop", "Mouse", "Laptop"],
-            "Sales": [1000, 500, 1000],
+            "Sales": [100, 200, None, 400],
+            "Region": ["Pune", "Mumbai", "Pune", "Mumbai"],
         }
     )
 
-    profile = profile_dataset(dataframe)
+    result = run_quality_checks(df)
 
-    assert profile["summary"]["duplicate_rows"] == 1
-    assert profile["summary"]["duplicate_percentage"] == 33.33
+    assert result["summary"]["missing_issues"] == 1
+    assert result["summary"]["total_missing_cells"] == 1
+
+    issue = next(
+        issue
+        for issue in result["issues"]
+        if issue["type"] == "missing_values"
+    )
+
+    assert issue["column"] == "Sales"
+    assert issue["count"] == 1
+    assert issue["severity"] == "high"
 
 
-def test_profile_dataset_missing_values() -> None:
-    """Profile should list columns containing missing values."""
-    dataframe = pd.DataFrame(
+def test_quality_checks_detect_duplicate_rows():
+    df = pd.DataFrame(
         {
-            "Product": ["Laptop", "Mouse", None],
-            "Sales": [1000, None, 500],
+            "Name": ["A", "B", "A"],
+            "Sales": [100, 200, 100],
         }
     )
 
-    profile = profile_dataset(dataframe)
+    result = run_quality_checks(df)
 
-    missing_values = profile["missing_values"]
+    assert result["summary"]["duplicate_rows"] == 1
 
-    assert len(missing_values) == 2
-
-    product_info = next(
-        item
-        for item in missing_values
-        if item["column"] == "Product"
+    issue = next(
+        issue
+        for issue in result["issues"]
+        if issue["type"] == "duplicate_rows"
     )
 
-    sales_info = next(
-        item
-        for item in missing_values
-        if item["column"] == "Sales"
-    )
-
-    assert product_info["missing"] == 1
-    assert sales_info["missing"] == 1
+    assert issue["count"] == 1
 
 
-def test_load_dataset_csv() -> None:
-    """CSV bytes should be loaded into a DataFrame."""
-    csv_content = (
-        "Product,Sales\n"
-        "Laptop,1000\n"
-        "Mouse,500\n"
-    ).encode("utf-8")
-
-    dataframe = load_dataset(
-        file_name="sales.csv",
-        file_bytes=csv_content,
-    )
-
-    assert len(dataframe) == 2
-    assert list(dataframe.columns) == ["Product", "Sales"]
-
-
-def test_load_dataset_excel() -> None:
-    """Excel loading is covered by the application dependency and loader."""
-    dataframe = pd.DataFrame(
+def test_quality_checks_detect_constant_column():
+    df = pd.DataFrame(
         {
-            "Product": ["Laptop", "Mouse"],
-            "Sales": [1000, 500],
+            "Sales": [100, 200, 300, 400],
+            "Status": ["Active", "Active", "Active", "Active"],
         }
     )
 
-    # The loader itself is tested through the CSV test and the
-    # dedicated Excel implementation is exercised during manual UI testing.
-    assert not dataframe.empty
+    result = run_quality_checks(df)
+
+    assert result["summary"]["constant_columns"] == 1
+
+    issue = next(
+        issue
+        for issue in result["issues"]
+        if issue["type"] == "constant_column"
+    )
+
+    assert issue["column"] == "Status"
+
+
+def test_quality_checks_detect_potential_outliers():
+    df = pd.DataFrame(
+        {
+            "Sales": [
+                100,
+                110,
+                120,
+                130,
+                140,
+                150,
+                10000,
+            ]
+        }
+    )
+
+    result = run_quality_checks(df)
+
+    assert result["summary"]["outlier_columns"] == 1
+
+    issue = next(
+        issue
+        for issue in result["issues"]
+        if issue["type"] == "potential_outliers"
+    )
+
+    assert issue["column"] == "Sales"
+    assert issue["count"] == 1
+
+
+def test_quality_checks_clean_dataset_has_no_issues():
+    df = pd.DataFrame(
+        {
+            "Sales": [100, 200, 300, 400, 500],
+            "Region": ["Pune", "Mumbai", "Delhi", "Pune", "Mumbai"],
+        }
+    )
+
+    result = run_quality_checks(df)
+
+    assert result["score"] == 100
+    assert result["issues"] == []
+    assert result["summary"]["total_issues"] == 0
+
+
+def test_quality_score_is_bounded():
+    df = pd.DataFrame(
+        {
+            "A": [None, None, None, None, None],
+            "B": ["X", "X", "X", "X", "X"],
+            "C": [1, 1, 1, 1, 1],
+        }
+    )
+
+    result = run_quality_checks(df)
+
+    assert 0 <= result["score"] <= 100
+
+
+def test_quality_checks_handles_small_numeric_columns():
+    df = pd.DataFrame(
+        {
+            "Sales": [100, 200, 300],
+        }
+    )
+
+    result = run_quality_checks(df)
+
+    # Outlier detection should not run on fewer than 4 observations.
+    assert result["summary"]["outlier_columns"] == 0

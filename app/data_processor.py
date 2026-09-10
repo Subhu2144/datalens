@@ -293,3 +293,238 @@ def profile_dataset(df: pd.DataFrame) -> dict[str, Any]:
         "missing_values": missing_by_column,
         "numeric_statistics": numeric_statistics,
     }
+
+def run_quality_checks(df):
+    """
+    Run deterministic data-quality checks on a dataframe.
+
+    Returns:
+        dict: Quality score, detected issues, and summary.
+    """
+
+    issues = []
+
+    # ---------------------------------------------------------
+    # 1. Missing-value checks
+    # ---------------------------------------------------------
+    total_cells = df.shape[0] * df.shape[1]
+
+    if total_cells > 0:
+        total_missing = int(df.isna().sum().sum())
+        total_missing_percentage = round(
+            (total_missing / total_cells) * 100, 2
+        )
+    else:
+        total_missing = 0
+        total_missing_percentage = 0.0
+
+    for column in df.columns:
+        missing_count = int(df[column].isna().sum())
+
+        if missing_count == 0:
+            continue
+
+        missing_percentage = round(
+            (missing_count / len(df)) * 100, 2
+        ) if len(df) > 0 else 0.0
+
+        if missing_percentage <= 5:
+            severity = "low"
+        elif missing_percentage <= 20:
+            severity = "medium"
+        else:
+            severity = "high"
+
+        issues.append(
+            {
+                "type": "missing_values",
+                "column": str(column),
+                "count": missing_count,
+                "percentage": missing_percentage,
+                "severity": severity,
+                "message": (
+                    f"{column} has {missing_count} missing value(s) "
+                    f"({missing_percentage}%)."
+                ),
+            }
+        )
+
+    # ---------------------------------------------------------
+    # 2. Duplicate-row check
+    # ---------------------------------------------------------
+    duplicate_rows = int(df.duplicated().sum())
+
+    duplicate_percentage = round(
+        (duplicate_rows / len(df)) * 100, 2
+    ) if len(df) > 0 else 0.0
+
+    if duplicate_rows > 0:
+
+        if duplicate_percentage <= 5:
+            severity = "low"
+        elif duplicate_percentage <= 20:
+            severity = "medium"
+        else:
+            severity = "high"
+
+        issues.append(
+            {
+                "type": "duplicate_rows",
+                "column": None,
+                "count": duplicate_rows,
+                "percentage": duplicate_percentage,
+                "severity": severity,
+                "message": (
+                    f"Dataset contains {duplicate_rows} duplicate row(s) "
+                    f"({duplicate_percentage}%)."
+                ),
+            }
+        )
+
+    # ---------------------------------------------------------
+    # 3. Constant-column check
+    # ---------------------------------------------------------
+    constant_columns = []
+
+    for column in df.columns:
+        unique_count = df[column].nunique(dropna=False)
+
+        if unique_count <= 1:
+            constant_columns.append(str(column))
+
+            issues.append(
+                {
+                    "type": "constant_column",
+                    "column": str(column),
+                    "count": 1,
+                    "percentage": 100.0,
+                    "severity": "medium",
+                    "message": (
+                        f"{column} contains only one unique value "
+                        "and may not provide useful analytical information."
+                    ),
+                }
+            )
+
+    # ---------------------------------------------------------
+    # 4. Potential numeric outliers using IQR
+    # ---------------------------------------------------------
+    outlier_columns = []
+
+    numeric_columns = df.select_dtypes(include=np.number).columns
+
+    for column in numeric_columns:
+        values = df[column].dropna()
+
+        # Need enough observations for a meaningful check
+        if len(values) < 4:
+            continue
+
+        q1 = values.quantile(0.25)
+        q3 = values.quantile(0.75)
+
+        iqr = q3 - q1
+
+        # No meaningful spread
+        if iqr <= 0:
+            continue
+
+        lower_bound = q1 - (1.5 * iqr)
+        upper_bound = q3 + (1.5 * iqr)
+
+        outlier_mask = (
+            (values < lower_bound)
+            | (values > upper_bound)
+        )
+
+        outlier_count = int(outlier_mask.sum())
+
+        if outlier_count == 0:
+            continue
+
+        outlier_percentage = round(
+            (outlier_count / len(values)) * 100, 2
+        )
+
+        outlier_columns.append(str(column))
+
+        if outlier_percentage <= 5:
+            severity = "low"
+        elif outlier_percentage <= 20:
+            severity = "medium"
+        else:
+            severity = "high"
+
+        issues.append(
+            {
+                "type": "potential_outliers",
+                "column": str(column),
+                "count": outlier_count,
+                "percentage": outlier_percentage,
+                "severity": severity,
+                "message": (
+                    f"{column} contains {outlier_count} potential "
+                    f"outlier(s) ({outlier_percentage}%) based on the IQR method."
+                ),
+            }
+        )
+
+    # ---------------------------------------------------------
+    # 5. Quality score
+    # ---------------------------------------------------------
+    # This is an app-defined heuristic score, not a statistical
+    # or industry-standard data-quality score.
+
+    missing_penalty = min(
+        30,
+        round(total_missing_percentage * 0.75)
+    )
+
+    duplicate_penalty = min(
+        20,
+        round(duplicate_percentage * 0.5)
+    )
+
+    constant_penalty = min(
+        15,
+        len(constant_columns) * 3
+    )
+
+    outlier_penalty = min(
+        20,
+        len(outlier_columns) * 3
+    )
+
+    total_penalty = (
+        missing_penalty
+        + duplicate_penalty
+        + constant_penalty
+        + outlier_penalty
+    )
+
+    quality_score = max(
+        0,
+        min(100, 100 - total_penalty)
+    )
+
+    # ---------------------------------------------------------
+    # 6. Summary
+    # ---------------------------------------------------------
+    summary = {
+        "missing_issues": sum(
+            1 for issue in issues
+            if issue["type"] == "missing_values"
+        ),
+        "duplicate_rows": duplicate_rows,
+        "constant_columns": len(constant_columns),
+        "outlier_columns": len(outlier_columns),
+        "total_issues": len(issues),
+        "total_missing_cells": total_missing,
+        "total_missing_percentage": total_missing_percentage,
+    }
+
+    return {
+        "score": quality_score,
+        "issues": issues,
+        "summary": summary,
+    }

@@ -1,17 +1,51 @@
-from __future__ import annotations
-
 import streamlit as st
+
+from app.agent import (
+    AgentError,
+    execute_intent,
+    generate_explanation,
+    generate_intent,
+)
+
+from app.analytics import (
+    AnalyticsError,
+    calculate_average,
+    calculate_correlation,
+    calculate_maximum,
+    calculate_minimum,
+    calculate_summary,
+    calculate_total,
+    group_by_aggregation,
+    top_n,
+)
+
+from app.charts import generate_auto_charts
 
 from app.data_processor import (
     DatasetValidationError,
     get_dataset_summary,
     load_dataset,
     profile_dataset,
+    run_quality_checks,
 )
 
 
-def initialize_session_state() -> None:
-    """Initialize values stored in Streamlit session state."""
+# ============================================================
+# Page Configuration
+# ============================================================
+
+st.set_page_config(
+    page_title="DataLens",
+    page_icon="🔎",
+    layout="wide",
+)
+
+
+# ============================================================
+# Session State
+# ============================================================
+
+def initialize_session_state():
 
     if "dataframe" not in st.session_state:
         st.session_state.dataframe = None
@@ -19,52 +53,108 @@ def initialize_session_state() -> None:
     if "file_name" not in st.session_state:
         st.session_state.file_name = None
 
+    if "profile" not in st.session_state:
+        st.session_state.profile = None
 
-def display_upload_section() -> None:
-    """Display the dataset upload interface."""
+    if "quality_report" not in st.session_state:
+        st.session_state.quality_report = None
 
-    st.subheader("Upload Dataset")
+    if "charts" not in st.session_state:
+        st.session_state.charts = []
+
+
+# ============================================================
+# Header
+# ============================================================
+
+def display_header():
+
+    st.title("🔎 DataLens")
+
+    st.caption(
+        "Intelligent Data Investigation Assistant"
+    )
+
+    st.write(
+        "Upload a CSV or Excel dataset to profile, "
+        "validate, visualize, and investigate your data."
+    )
+
+
+# ============================================================
+# Dataset Upload
+# ============================================================
+
+def display_upload_section():
+
+    st.subheader("📁 Upload Dataset")
 
     uploaded_file = st.file_uploader(
-        "Upload a CSV or Excel dataset",
+        "Choose a CSV or Excel file",
         type=["csv", "xlsx"],
-        help="Supported formats: CSV and Excel (.xlsx)",
+        help="Supported formats: CSV and XLSX",
     )
 
     if uploaded_file is None:
         return
 
     try:
+
+        file_bytes = uploaded_file.getvalue()
+
         dataframe = load_dataset(
-            file_name=uploaded_file.name,
-            file_bytes=uploaded_file.getvalue(),
+            uploaded_file.name,
+            file_bytes,
         )
 
         st.session_state.dataframe = dataframe
+
         st.session_state.file_name = uploaded_file.name
 
+        st.session_state.profile = profile_dataset(
+            dataframe
+        )
+
+        st.session_state.quality_report = run_quality_checks(
+            dataframe
+        )
+
+        st.session_state.charts = generate_auto_charts(
+            dataframe
+        )
+
         st.success(
-            f"Successfully loaded **{uploaded_file.name}**."
+            f"Successfully loaded {uploaded_file.name}"
         )
 
     except DatasetValidationError as exc:
-        st.session_state.dataframe = None
-        st.session_state.file_name = None
 
         st.error(str(exc))
 
-    except Exception:
         st.session_state.dataframe = None
         st.session_state.file_name = None
+        st.session_state.profile = None
+        st.session_state.quality_report = None
+        st.session_state.charts = []
+
+    except Exception as exc:
 
         st.error(
-            "Something went wrong while processing the dataset. "
-            "Please check the file and try again."
+            f"Unexpected error while loading dataset: {exc}"
         )
 
+        st.session_state.dataframe = None
+        st.session_state.file_name = None
+        st.session_state.profile = None
+        st.session_state.quality_report = None
+        st.session_state.charts = []
 
-def display_dataset_overview() -> None:
-    """Display the high-level dataset overview."""
+
+# ============================================================
+# Dataset Overview
+# ============================================================
+
+def display_dataset_overview():
 
     dataframe = st.session_state.dataframe
 
@@ -73,222 +163,952 @@ def display_dataset_overview() -> None:
 
     summary = get_dataset_summary(dataframe)
 
-    st.subheader("Dataset Overview")
+    st.subheader("📊 Dataset Overview")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
+
         st.metric(
             "Rows",
-            f"{summary['rows']:,}",
+            summary["rows"],
         )
 
     with col2:
+
         st.metric(
             "Columns",
-            f"{summary['columns']:,}",
+            summary["columns"],
         )
 
     with col3:
+
         st.metric(
             "File",
             st.session_state.file_name,
         )
 
 
-def display_dataset_preview() -> None:
-    """Display a preview of the uploaded dataset."""
+# ============================================================
+# Dataset Preview
+# ============================================================
+
+def display_dataset_preview():
 
     dataframe = st.session_state.dataframe
 
     if dataframe is None:
         return
 
-    st.subheader("Dataset Preview")
+    st.subheader("👀 Dataset Preview")
 
     st.dataframe(
         dataframe.head(10),
-        width="stretch",
-        hide_index=True,
+        use_container_width=True,
     )
 
 
-def display_profile_summary(profile: dict) -> None:
-    """Display dataset-level profiling metrics."""
+# ============================================================
+# Profiling Dashboard
+# ============================================================
+
+def display_profiling_dashboard():
+
+    profile = st.session_state.profile
+
+    if profile is None:
+        return
+
+    st.subheader("🔬 Data Profile")
 
     summary = profile["summary"]
-
-    st.subheader("Data Profile")
 
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
+
         st.metric(
             "Total Cells",
-            f"{summary['total_cells']:,}",
+            summary["total_cells"],
         )
 
     with col2:
+
         st.metric(
             "Missing Cells",
-            f"{summary['missing_cells']:,}",
+            summary["missing_cells"],
         )
 
     with col3:
+
         st.metric(
             "Missing %",
-            f"{summary['missing_percentage']:.2f}%",
+            f'{summary["missing_percentage"]}%',
         )
 
     with col4:
+
         st.metric(
             "Duplicate Rows",
-            f"{summary['duplicate_rows']:,}",
+            summary["duplicate_rows"],
         )
 
-
-def display_column_information(profile: dict) -> None:
-    """Display column-level information."""
-
-    st.subheader("Column Information")
+    st.markdown("### Column Information")
 
     column_details = profile["column_details"]
 
-    if not column_details:
-        st.info("No column information is available.")
-        return
+    if column_details:
 
-    st.dataframe(
-        column_details,
-        width="stretch",
-        hide_index=True,
-    )
+        st.dataframe(
+            column_details,
+            use_container_width=True,
+        )
 
-
-def display_missing_values(profile: dict) -> None:
-    """Display columns containing missing values."""
-
-    st.subheader("Missing Values")
+    st.markdown("### Missing Values")
 
     missing_values = profile["missing_values"]
 
-    if not missing_values:
-        st.success("No missing values detected.")
-        return
+    if missing_values:
 
-    st.dataframe(
-        missing_values,
-        width="stretch",
-        hide_index=True,
-    )
+        st.dataframe(
+            missing_values,
+            use_container_width=True,
+        )
 
+    else:
 
-def display_numeric_statistics(profile: dict) -> None:
-    """Display statistics for numeric columns."""
+        st.success(
+            "No missing values found."
+        )
 
-    st.subheader("Numeric Statistics")
+    st.markdown("### Numeric Statistics")
 
     numeric_statistics = profile["numeric_statistics"]
 
-    if not numeric_statistics:
-        st.info("No numeric columns were detected.")
+    if numeric_statistics:
+
+        statistics_rows = []
+
+        for column, statistics in numeric_statistics.items():
+
+            statistics_rows.append(
+                {
+                    "Column": column,
+                    **statistics,
+                }
+            )
+
+        st.dataframe(
+            statistics_rows,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.info(
+            "No numeric columns found."
+        )
+
+
+# ============================================================
+# Data Quality Dashboard
+# ============================================================
+
+def display_quality_dashboard():
+
+    quality_report = st.session_state.quality_report
+
+    if quality_report is None:
         return
 
-    statistics_rows = []
+    st.subheader("🛡️ Data Quality")
 
-    for column, statistics in numeric_statistics.items():
-        statistics_rows.append(
+    score = quality_report["score"]
+
+    summary = quality_report["summary"]
+
+    issues = quality_report["issues"]
+
+    if score >= 90:
+
+        score_status = "Excellent"
+
+    elif score >= 75:
+
+        score_status = "Good"
+
+    elif score >= 50:
+
+        score_status = "Needs Attention"
+
+    else:
+
+        score_status = "Poor"
+
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+
+        st.metric(
+            "Quality Score",
+            f"{score}/100",
+        )
+
+    with col2:
+
+        st.write(
+            f"**Status:** {score_status}"
+        )
+
+        st.progress(
+            score / 100
+        )
+
+    st.caption(
+        "Quality score is an app-defined heuristic based on "
+        "missing values, duplicate rows, constant columns, "
+        "and potential outliers."
+    )
+
+    st.markdown("### Quality Summary")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+
+        st.metric(
+            "Missing Issues",
+            summary["missing_issues"],
+        )
+
+    with col2:
+
+        st.metric(
+            "Duplicate Rows",
+            summary["duplicate_rows"],
+        )
+
+    with col3:
+
+        st.metric(
+            "Constant Columns",
+            summary["constant_columns"],
+        )
+
+    with col4:
+
+        st.metric(
+            "Outlier Columns",
+            summary["outlier_columns"],
+        )
+
+    st.markdown("### Detected Issues")
+
+    if not issues:
+
+        st.success(
+            "No major data-quality issues detected."
+        )
+
+        return
+
+    for issue in issues:
+
+        severity = issue["severity"]
+
+        if severity == "high":
+
+            st.error(
+                f"🔴 **{issue['message']}**"
+            )
+
+        elif severity == "medium":
+
+            st.warning(
+                f"🟠 **{issue['message']}**"
+            )
+
+        else:
+
+            st.info(
+                f"🔵 **{issue['message']}**"
+            )
+
+    st.markdown("### Issue Details")
+
+    issue_rows = []
+
+    for issue in issues:
+
+        issue_rows.append(
             {
-                "Column": column,
-                "Count": statistics["count"],
-                "Mean": statistics["mean"],
-                "Median": statistics["median"],
-                "Std": statistics["std"],
-                "Min": statistics["min"],
-                "Max": statistics["max"],
+                "Type": issue["type"],
+                "Column": issue["column"] or "-",
+                "Count": issue["count"],
+                "Percentage": f'{issue["percentage"]}%',
+                "Severity": issue["severity"],
+                "Message": issue["message"],
             }
         )
 
     st.dataframe(
-        statistics_rows,
-        width="stretch",
-        hide_index=True,
+        issue_rows,
+        use_container_width=True,
     )
 
 
-def display_profiling_dashboard() -> None:
-    """Generate and display the complete profiling dashboard."""
+# ============================================================
+# Automatic Visualization Dashboard
+# ============================================================
+
+def display_visualization_dashboard():
+
+    charts = st.session_state.charts
+
+    if not charts:
+        return
+
+    st.subheader("📈 Automatic Visualizations")
+
+    st.caption(
+        "DataLens automatically selects basic visualizations "
+        "based on the detected column types."
+    )
+
+    for index, chart in enumerate(charts):
+
+        if index > 0:
+            st.divider()
+
+        st.markdown(
+            f"### {chart['title']}"
+        )
+
+        st.plotly_chart(
+            chart["figure"],
+            use_container_width=True,
+        )
+
+
+# ============================================================
+# Analytics Helpers
+# ============================================================
+
+def get_numeric_columns(df):
+
+    return df.select_dtypes(
+        include="number"
+    ).columns.tolist()
+
+
+def get_all_columns(df):
+
+    return df.columns.tolist()
+
+
+# ============================================================
+# Analytics Result Display
+# ============================================================
+
+def display_analytics_result(result):
+
+    operation = result["operation"]
+
+    if operation == "summary":
+
+        st.dataframe(
+            [
+                {
+                    "Metric": "Count",
+                    "Value": result["count"],
+                },
+                {
+                    "Metric": "Sum",
+                    "Value": result["sum"],
+                },
+                {
+                    "Metric": "Mean",
+                    "Value": result["mean"],
+                },
+                {
+                    "Metric": "Median",
+                    "Value": result["median"],
+                },
+                {
+                    "Metric": "Minimum",
+                    "Value": result["min"],
+                },
+                {
+                    "Metric": "Maximum",
+                    "Value": result["max"],
+                },
+                {
+                    "Metric": "Standard Deviation",
+                    "Value": result["std"],
+                },
+            ],
+            use_container_width=True,
+        )
+
+    elif operation in {
+        "total",
+        "average",
+        "minimum",
+        "maximum",
+    }:
+
+        st.metric(
+            operation.replace(
+                "_",
+                " "
+            ).title(),
+            result["value"],
+        )
+
+    elif operation == "group_by":
+
+        st.dataframe(
+            result["data"],
+            use_container_width=True,
+        )
+
+    elif operation in {
+        "top_n",
+        "bottom_n",
+    }:
+
+        st.dataframe(
+            result["data"],
+            use_container_width=True,
+        )
+
+    elif operation == "correlation":
+
+        st.metric(
+            "Pearson Correlation",
+            round(
+                result["value"],
+                4,
+            ),
+        )
+
+
+# ============================================================
+# Analytics Dashboard
+# ============================================================
+
+def display_analytics_dashboard():
 
     dataframe = st.session_state.dataframe
 
     if dataframe is None:
         return
 
-    try:
-        profile = profile_dataset(dataframe)
+    st.subheader("🧮 Data Analytics")
 
-        st.divider()
-
-        display_profile_summary(profile)
-
-        st.divider()
-
-        display_column_information(profile)
-
-        st.divider()
-
-        display_missing_values(profile)
-
-        st.divider()
-
-        display_numeric_statistics(profile)
-
-    except DatasetValidationError as exc:
-        st.error(
-            f"Unable to profile the dataset: {exc}"
-        )
-
-    except Exception:
-        st.error(
-            "Something went wrong while generating the data profile."
-        )
-
-
-def main() -> None:
-    """Run the DataLens Streamlit application."""
-
-    st.set_page_config(
-        page_title="DataLens",
-        page_icon="📊",
-        layout="wide",
-        initial_sidebar_state="expanded",
+    st.caption(
+        "Run deterministic analytical operations using "
+        "Pandas. No LLM is used for the calculations."
     )
+
+    numeric_columns = get_numeric_columns(
+        dataframe
+    )
+
+    all_columns = get_all_columns(
+        dataframe
+    )
+
+    operation = st.selectbox(
+        "Choose an analysis",
+        [
+            "Summary",
+            "Total",
+            "Average",
+            "Minimum",
+            "Maximum",
+            "Group By",
+            "Top / Bottom N",
+            "Correlation",
+        ],
+    )
+
+    # --------------------------------------------------------
+    # Summary / Total / Average / Min / Max
+    # --------------------------------------------------------
+
+    if operation in {
+        "Summary",
+        "Total",
+        "Average",
+        "Minimum",
+        "Maximum",
+    }:
+
+        if not numeric_columns:
+
+            st.warning(
+                "No numeric columns are available for this analysis."
+            )
+
+            return
+
+        column = st.selectbox(
+            "Select numeric column",
+            numeric_columns,
+        )
+
+        if st.button(
+            "Run Analysis",
+            key="basic_analytics_button",
+        ):
+
+            try:
+
+                if operation == "Summary":
+
+                    result = calculate_summary(
+                        dataframe,
+                        column,
+                    )
+
+                elif operation == "Total":
+
+                    result = calculate_total(
+                        dataframe,
+                        column,
+                    )
+
+                elif operation == "Average":
+
+                    result = calculate_average(
+                        dataframe,
+                        column,
+                    )
+
+                elif operation == "Minimum":
+
+                    result = calculate_minimum(
+                        dataframe,
+                        column,
+                    )
+
+                else:
+
+                    result = calculate_maximum(
+                        dataframe,
+                        column,
+                    )
+
+                display_analytics_result(
+                    result
+                )
+
+            except AnalyticsError as exc:
+
+                st.error(
+                    str(exc)
+                )
+
+    # --------------------------------------------------------
+    # Group By
+    # --------------------------------------------------------
+
+    elif operation == "Group By":
+
+        if not numeric_columns:
+
+            st.warning(
+                "No numeric columns are available for aggregation."
+            )
+
+            return
+
+        group_column = st.selectbox(
+            "Group by column",
+            all_columns,
+            key="group_column",
+        )
+
+        value_column = st.selectbox(
+            "Value column",
+            numeric_columns,
+            key="group_value_column",
+        )
+
+        aggregation = st.selectbox(
+            "Aggregation",
+            [
+                "sum",
+                "mean",
+                "min",
+                "max",
+                "count",
+            ],
+        )
+
+        if st.button(
+            "Run Group Analysis",
+            key="group_analytics_button",
+        ):
+
+            try:
+
+                result = group_by_aggregation(
+                    dataframe,
+                    group_column,
+                    value_column,
+                    aggregation,
+                )
+
+                display_analytics_result(
+                    result
+                )
+
+            except AnalyticsError as exc:
+
+                st.error(
+                    str(exc)
+                )
+
+    # --------------------------------------------------------
+    # Top / Bottom N
+    # --------------------------------------------------------
+
+    elif operation == "Top / Bottom N":
+
+        if not numeric_columns:
+
+            st.warning(
+                "No numeric columns are available."
+            )
+
+            return
+
+        column = st.selectbox(
+            "Select numeric column",
+            numeric_columns,
+            key="top_n_column",
+        )
+
+        direction = st.radio(
+            "Ranking",
+            [
+                "Top",
+                "Bottom",
+            ],
+            horizontal=True,
+        )
+
+        n = st.number_input(
+            "Number of records",
+            min_value=1,
+            max_value=100,
+            value=5,
+            step=1,
+        )
+
+        if st.button(
+            "Run Ranking",
+            key="top_n_button",
+        ):
+
+            try:
+
+                result = top_n(
+                    dataframe,
+                    column,
+                    n=int(n),
+                    ascending=(
+                        direction == "Bottom"
+                    ),
+                )
+
+                display_analytics_result(
+                    result
+                )
+
+            except AnalyticsError as exc:
+
+                st.error(
+                    str(exc)
+                )
+
+    # --------------------------------------------------------
+    # Correlation
+    # --------------------------------------------------------
+
+    elif operation == "Correlation":
+
+        if len(numeric_columns) < 2:
+
+            st.warning(
+                "At least two numeric columns are required "
+                "for correlation analysis."
+            )
+
+            return
+
+        column_a = st.selectbox(
+            "First numeric column",
+            numeric_columns,
+            key="correlation_a",
+        )
+
+        column_b = st.selectbox(
+            "Second numeric column",
+            numeric_columns,
+            key="correlation_b",
+        )
+
+        if st.button(
+            "Calculate Correlation",
+            key="correlation_button",
+        ):
+
+            try:
+
+                result = calculate_correlation(
+                    dataframe,
+                    column_a,
+                    column_b,
+                )
+
+                display_analytics_result(
+                    result
+                )
+
+            except AnalyticsError as exc:
+
+                st.error(
+                    str(exc)
+                )
+
+
+# ============================================================
+# Natural Language Investigation
+# ============================================================
+
+def display_investigation_dashboard():
+
+    dataframe = st.session_state.dataframe
+
+    if dataframe is None:
+        return
+
+    st.subheader("🤖 Ask DataLens")
+
+    st.caption(
+        "Ask a natural-language question about your dataset. "
+        "Gemini plans the analysis, while Pandas performs "
+        "the actual calculation."
+    )
+
+    question = st.text_input(
+        "Ask a question",
+        placeholder=(
+            "Example: What is the total Sales by City?"
+        ),
+        key="investigation_question",
+    )
+
+    if st.button(
+        "Investigate",
+        key="investigation_button",
+    ):
+
+        if not question.strip():
+
+            st.warning(
+                "Please enter a question."
+            )
+
+            return
+
+        try:
+
+            # ------------------------------------------------
+            # Step 1: Generate Intent
+            # ------------------------------------------------
+
+            with st.spinner(
+                "Understanding your question..."
+            ):
+
+                intent = generate_intent(
+                    question,
+                    dataframe,
+                )
+
+            # ------------------------------------------------
+            # Step 2: Display Analysis Plan
+            # ------------------------------------------------
+
+            st.markdown(
+                "### 🧠 Analysis Plan"
+            )
+
+            st.write(
+                f"**Operation:** `{intent.operation}`"
+            )
+
+            if intent.column:
+
+                st.write(
+                    f"**Column:** `{intent.column}`"
+                )
+
+            if intent.group_column:
+
+                st.write(
+                    f"**Group Column:** `{intent.group_column}`"
+                )
+
+            if intent.value_column:
+
+                st.write(
+                    f"**Value Column:** `{intent.value_column}`"
+                )
+
+            if intent.aggregation:
+
+                st.write(
+                    f"**Aggregation:** `{intent.aggregation}`"
+                )
+
+            if intent.n:
+
+                st.write(
+                    f"**N:** `{intent.n}`"
+                )
+
+            if intent.column_a:
+
+                st.write(
+                    f"**Column A:** `{intent.column_a}`"
+                )
+
+            if intent.column_b:
+
+                st.write(
+                    f"**Column B:** `{intent.column_b}`"
+                )
+
+            # ------------------------------------------------
+            # Step 3: Execute Deterministic Analysis
+            # ------------------------------------------------
+
+            with st.spinner(
+                "Analyzing your data..."
+            ):
+
+                result = execute_intent(
+                    intent,
+                    dataframe,
+                )
+
+            # ------------------------------------------------
+            # Step 4: Display Result
+            # ------------------------------------------------
+
+            st.markdown(
+                "### 📊 Result"
+            )
+
+            display_analytics_result(
+                result
+            )
+
+            # ------------------------------------------------
+            # Step 5: Generate Explanation
+            # ------------------------------------------------
+
+            with st.spinner(
+                "Generating insights..."
+            ):
+
+                explanation = generate_explanation(
+                    question,
+                    intent,
+                    result,
+                )
+
+            st.markdown(
+                "### 💡 DataLens Insight"
+            )
+
+            st.info(
+                explanation
+            )
+
+        except AgentError as exc:
+
+            st.error(
+                str(exc)
+            )
+
+        except Exception as exc:
+
+            st.error(
+                f"Unexpected investigation error: {exc}"
+            )
+
+
+# ============================================================
+# Main Application
+# ============================================================
+
+def main():
 
     initialize_session_state()
 
-    st.title("📊 DataLens")
-    st.subheader("Intelligent Data Investigation Assistant")
-
-    st.write(
-        "Upload a CSV or Excel dataset, explore its quality, "
-        "visualize important patterns, and ask questions using "
-        "natural language."
-    )
+    display_header()
 
     st.divider()
 
     display_upload_section()
 
-    if st.session_state.dataframe is not None:
-        display_dataset_overview()
-        display_dataset_preview()
-        display_profiling_dashboard()
+    if st.session_state.dataframe is None:
 
-    else:
         st.info(
-            "Upload a dataset to begin your investigation."
+            "Upload a dataset to start the investigation."
         )
 
+        return
+
+    st.divider()
+
+    display_dataset_overview()
+
+    st.divider()
+
+    display_dataset_preview()
+
+    st.divider()
+
+    display_profiling_dashboard()
+
+    st.divider()
+
+    display_quality_dashboard()
+
+    st.divider()
+
+    display_visualization_dashboard()
+
+    st.divider()
+
+    display_analytics_dashboard()
+
+    st.divider()
+
+    display_investigation_dashboard()
+
+
+# ============================================================
+# Application Entry Point
+# ============================================================
 
 if __name__ == "__main__":
+
     main()
