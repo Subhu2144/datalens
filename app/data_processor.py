@@ -528,3 +528,93 @@ def run_quality_checks(df):
         "issues": issues,
         "summary": summary,
     }
+
+
+# ---------------------------------------------------------------------------
+# Data cleaning
+# ---------------------------------------------------------------------------
+
+def remove_duplicate_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of the dataframe with duplicate rows removed."""
+    validate_dataframe(df)
+    return df.drop_duplicates().reset_index(drop=True)
+
+
+def fill_numeric_missing_with_median(df: pd.DataFrame) -> pd.DataFrame:
+    """Fill missing values in numeric columns with each column's median."""
+    validate_dataframe(df)
+
+    cleaned_df = df.copy()
+
+    numeric_columns = cleaned_df.select_dtypes(include=np.number).columns
+
+    for column in numeric_columns:
+        if cleaned_df[column].isna().any():
+            median = cleaned_df[column].median()
+            if not pd.isna(median):
+                cleaned_df[column] = cleaned_df[column].fillna(median)
+
+    return cleaned_df
+
+
+def fill_categorical_missing_with_mode(df: pd.DataFrame) -> pd.DataFrame:
+    """Fill missing categorical values with each column's mode."""
+    validate_dataframe(df)
+
+    cleaned_df = df.copy()
+
+    categorical_columns = cleaned_df.select_dtypes(
+        include=["object", "category", "bool"]
+    ).columns
+
+    for column in categorical_columns:
+        if cleaned_df[column].isna().any():
+            mode = cleaned_df[column].mode(dropna=True)
+
+            if not mode.empty:
+                cleaned_df[column] = cleaned_df[column].fillna(mode.iloc[0])
+
+    return cleaned_df
+
+
+def drop_rows_with_missing_values(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with rows containing one or more missing values removed."""
+    validate_dataframe(df)
+    return df.dropna().reset_index(drop=True)
+
+
+def apply_cleaning(
+    df: pd.DataFrame,
+    remove_duplicates: bool = False,
+    fill_numeric_median: bool = False,
+    fill_categorical_mode: bool = False,
+    drop_missing_rows: bool = False,
+) -> pd.DataFrame:
+    """
+    Apply selected deterministic cleaning operations to a dataframe.
+
+    Operations are applied in a predictable order:
+    1. Fill numeric missing values with median.
+    2. Fill categorical missing values with mode.
+    3. Remove duplicate rows.
+    4. Drop rows that still contain missing values.
+
+    The original dataframe is never modified.
+    """
+    validate_dataframe(df)
+
+    cleaned_df = df.copy()
+
+    if fill_numeric_median:
+        cleaned_df = fill_numeric_missing_with_median(cleaned_df)
+
+    if fill_categorical_mode:
+        cleaned_df = fill_categorical_missing_with_mode(cleaned_df)
+
+    if remove_duplicates:
+        cleaned_df = remove_duplicate_rows(cleaned_df)
+
+    if drop_missing_rows:
+        cleaned_df = drop_rows_with_missing_values(cleaned_df)
+
+    return cleaned_df

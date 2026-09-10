@@ -1,3 +1,4 @@
+import pandas as pd
 import streamlit as st
 
 from app.agent import (
@@ -19,10 +20,14 @@ from app.analytics import (
     top_n,
 )
 
-from app.charts import generate_auto_charts
+from app.charts import (
+    generate_analysis_chart,
+    generate_auto_charts,
+)
 
 from app.data_processor import (
     DatasetValidationError,
+    apply_cleaning,
     get_dataset_summary,
     load_dataset,
     profile_dataset,
@@ -61,6 +66,9 @@ def initialize_session_state():
 
     if "charts" not in st.session_state:
         st.session_state.charts = []
+
+    if "cleaned_dataframe" not in st.session_state:
+        st.session_state.cleaned_dataframe = None
 
 
 # ============================================================
@@ -108,6 +116,7 @@ def display_upload_section():
         )
 
         st.session_state.dataframe = dataframe
+        st.session_state.cleaned_dataframe = None
 
         st.session_state.file_name = uploaded_file.name
 
@@ -136,6 +145,7 @@ def display_upload_section():
         st.session_state.profile = None
         st.session_state.quality_report = None
         st.session_state.charts = []
+        st.session_state.cleaned_dataframe = None
 
     except Exception as exc:
 
@@ -148,6 +158,135 @@ def display_upload_section():
         st.session_state.profile = None
         st.session_state.quality_report = None
         st.session_state.charts = []
+        st.session_state.cleaned_dataframe = None
+
+
+# ============================================================
+# Dataset Cleaning
+# ============================================================
+
+def display_cleaning_dashboard():
+    dataframe = st.session_state.dataframe
+
+    if dataframe is None:
+        return
+
+    st.subheader("🧹 Data Cleaning")
+
+    st.caption(
+        "Create a cleaned copy of your dataset without modifying "
+        "the original uploaded data."
+    )
+
+    duplicate_count = int(dataframe.duplicated().sum())
+    missing_count = int(dataframe.isna().sum().sum())
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric("Missing Cells", missing_count)
+
+    with col2:
+        st.metric("Duplicate Rows", duplicate_count)
+
+    if missing_count == 0 and duplicate_count == 0:
+        st.success("No missing values or duplicate rows detected.")
+        return
+
+    st.markdown("### Cleaning Options")
+
+    options = st.multiselect(
+        "Select cleaning operations",
+        [
+            "Remove duplicate rows",
+            "Fill numeric missing values with median",
+            "Fill categorical missing values with mode",
+            "Drop rows with missing values",
+        ],
+        key="cleaning_options",
+    )
+
+    if (
+        "Fill numeric missing values with median" in options
+        and not dataframe.select_dtypes(include="number").columns.tolist()
+    ):
+        st.warning("No numeric columns are available for median filling.")
+
+    if (
+        "Fill categorical missing values with mode" in options
+        and not dataframe.select_dtypes(
+            include=["object", "category", "bool"]
+        ).columns.tolist()
+    ):
+        st.warning("No categorical columns are available for mode filling.")
+
+    if st.button("Preview Cleaning", key="preview_cleaning_button"):
+        cleaned = apply_cleaning(
+            dataframe,
+            remove_duplicates="Remove duplicate rows" in options,
+            fill_numeric_median=(
+                "Fill numeric missing values with median" in options
+            ),
+            fill_categorical_mode=(
+                "Fill categorical missing values with mode" in options
+            ),
+            drop_missing_rows="Drop rows with missing values" in options,
+        )
+
+        st.session_state.cleaned_dataframe = cleaned
+
+    cleaned_dataframe = st.session_state.cleaned_dataframe
+
+    if cleaned_dataframe is None:
+        if not options:
+            st.info("Select at least one cleaning operation.")
+        return
+
+    st.markdown("### Cleaning Preview")
+
+    original_missing = int(dataframe.isna().sum().sum())
+    cleaned_missing = int(cleaned_dataframe.isna().sum().sum())
+
+    original_duplicates = int(dataframe.duplicated().sum())
+    cleaned_duplicates = int(cleaned_dataframe.duplicated().sum())
+
+    comparison_col1, comparison_col2 = st.columns(2)
+
+    with comparison_col1:
+        st.markdown("**Before**")
+        st.write(f"Rows: {len(dataframe)}")
+        st.write(f"Missing cells: {original_missing}")
+        st.write(f"Duplicate rows: {original_duplicates}")
+
+    with comparison_col2:
+        st.markdown("**After**")
+        st.write(f"Rows: {len(cleaned_dataframe)}")
+        st.write(f"Missing cells: {cleaned_missing}")
+        st.write(f"Duplicate rows: {cleaned_duplicates}")
+
+    st.dataframe(
+        cleaned_dataframe.head(10),
+        use_container_width=True,
+    )
+
+    if st.button("Apply Cleaning", key="apply_cleaning_button"):
+        st.session_state.dataframe = cleaned_dataframe.copy()
+        st.session_state.cleaned_dataframe = None
+
+        st.session_state.profile = profile_dataset(
+            st.session_state.dataframe
+        )
+
+        st.session_state.quality_report = run_quality_checks(
+            st.session_state.dataframe
+        )
+
+        st.session_state.charts = generate_auto_charts(
+            st.session_state.dataframe
+        )
+
+        st.success("Cleaning applied successfully.")
+        st.rerun()
 
 
 # ============================================================
@@ -1020,7 +1159,26 @@ def display_investigation_dashboard():
             )
 
             # ------------------------------------------------
-            # Step 5: Generate Explanation
+            # Step 5: Generate Analysis Chart
+            # ------------------------------------------------
+
+            chart = generate_analysis_chart(
+                result,
+                intent,
+            )
+
+            if chart is not None:
+                st.markdown(
+                    "### 📈 Visualization"
+                )
+
+                st.plotly_chart(
+                    chart["figure"],
+                    use_container_width=True,
+                )
+
+            # ------------------------------------------------
+            # Step 6: Generate Explanation
             # ------------------------------------------------
 
             with st.spinner(
@@ -1083,6 +1241,10 @@ def main():
     st.divider()
 
     display_dataset_preview()
+
+    st.divider()
+
+    display_cleaning_dashboard()
 
     st.divider()
 

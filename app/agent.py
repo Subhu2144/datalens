@@ -334,6 +334,20 @@ def normalize_intent(intent, question, df):
     return intent
 
 
+def _format_gemini_error(exc: Exception, operation: str) -> str:
+    """Convert common Gemini API failures into user-friendly messages."""
+    error_text = str(exc)
+    normalized = error_text.upper()
+
+    if "429" in normalized or "RESOURCE_EXHAUSTED" in normalized:
+        return (
+            "Gemini API quota is temporarily exhausted. "
+            "Please try again later or check your Gemini API quota and billing settings."
+        )
+
+    return f"Gemini {operation} failed: {exc}"
+
+
 # ============================================================
 # Intent Generation
 # ============================================================
@@ -398,7 +412,7 @@ User question:
     except Exception as exc:
 
         raise AgentError(
-            f"Gemini request failed: {exc}"
+            _format_gemini_error(exc, "request")
         ) from exc
 
     try:
@@ -751,7 +765,7 @@ Write a concise answer for the user.
     except Exception as exc:
 
         raise AgentError(
-            f"Gemini explanation request failed: {exc}"
+            _format_gemini_error(exc, "explanation request")
         ) from exc
 
     explanation = response.text.strip()
